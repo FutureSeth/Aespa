@@ -71,7 +71,7 @@ extension AespaPhotoContext: PhotoContext {
         autoVideoOrientationEnabled: Bool = false,
         _ completionHandler: @escaping (Result<PhotoFile, Error>) -> Void
     ) {
-        Task(priority: .utility) {
+        Task(priority: .utility) { @MainActor in
             do {
                 let photoFile = try await self.capturePhotoWithError(autoVideoOrientationEnabled: autoVideoOrientationEnabled)
                 completionHandler(.success(photoFile))

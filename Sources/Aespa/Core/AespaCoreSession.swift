@@ -24,70 +24,78 @@ class AespaCoreSession: AVCaptureSession {
     
     func run<T: AespaSessionTuning>(_ tuner: T, _ onComplete: @escaping CompletionHandler) {
         workQueue.addOperation {
-            do {
-                if tuner.needTransaction { self.beginConfiguration() }
-                defer {
-                    if tuner.needTransaction { self.commitConfiguration() }
-                    onComplete(.success(()))
+            DispatchQueue.main.async {
+                do {
+                    if tuner.needTransaction { self.beginConfiguration() }
+                    defer {
+                        if tuner.needTransaction { self.commitConfiguration() }
+                        onComplete(.success(()))
+                    }
+                    
+                    try tuner.tune(self)
+                } catch let error {
+                    Logger.log(error: error, message: "in \(tuner)")
+                    onComplete(.failure(error))
                 }
-                
-                try tuner.tune(self)
-            } catch let error {
-                Logger.log(error: error, message: "in \(tuner)")
-                onComplete(.failure(error))
             }
         }
     }
     
     func run<T: AespaDeviceTuning>(_ tuner: T, _ onComplete: @escaping CompletionHandler) {
         workQueue.addOperation {
-            do {
-                guard let device = self.videoDeviceInput?.device else {
-                    throw AespaError.device(reason: .invalid)
+            DispatchQueue.main.async {
+                do {
+                    guard let device = self.videoDeviceInput?.device else {
+                        throw AespaError.device(reason: .invalid)
+                    }
+                    
+                    if tuner.needLock { try device.lockForConfiguration() }
+                    defer {
+                        if tuner.needLock { device.unlockForConfiguration() }
+                        onComplete(.success(()))
+                    }
+                    
+                    try tuner.tune(device)
+                } catch let error {
+                    Logger.log(error: error, message: "in \(tuner)")
+                    onComplete(.failure(error))
                 }
-                
-                if tuner.needLock { try device.lockForConfiguration() }
-                defer {
-                    if tuner.needLock { device.unlockForConfiguration() }
-                    onComplete(.success(()))
-                }
-                
-                try tuner.tune(device)
-            } catch let error {
-                Logger.log(error: error, message: "in \(tuner)")
-                onComplete(.failure(error))
             }
         }
     }
     
     func run<T: AespaConnectionTuning>(_ tuner: T, _ onComplete: @escaping CompletionHandler) {
         workQueue.addOperation {
-            do {
-                guard let connection = self.connections.first else {
-                    throw AespaError.session(reason: .cannotFindConnection)
+            DispatchQueue.main.async {
+                do {
+                    guard let connection = self.connections.first else {
+                        throw AespaError.session(reason: .cannotFindConnection)
+                    }
+                    
+                    try tuner.tune(connection)
+                    onComplete(.success(()))
+                } catch let error {
+                    Logger.log(error: error, message: "in \(tuner)")
+                    onComplete(.failure(error))
                 }
-                
-                try tuner.tune(connection)
-                onComplete(.success(()))
-            } catch let error {
-                Logger.log(error: error, message: "in \(tuner)")
-                onComplete(.failure(error))
             }
         }
     }
     
     func run<T: AespaMovieFileOutputProcessing>(_ processor: T, _ onComplete: @escaping CompletionHandler) {
         workQueue.addOperation {
-            do {
-                guard let output = self.movieFileOutput else {
-                    throw AespaError.session(reason: .cannotFindConnection)
+            DispatchQueue.main.async {
+                do {
+                    guard let output = self.movieFileOutput else {
+                        throw AespaError.session(reason: .cannotFindConnection)
+                    }
+                    
+                    try processor.process(output)
+                    onComplete(.success(()))
+                } catch let error {
+                    Logger.log(error: error, message: "in \(processor)")
+                    onComplete(.failure(error))
                 }
-                
-                try processor.process(output)
-                onComplete(.success(()))
-            } catch let error {
-                Logger.log(error: error, message: "in \(processor)")
-                onComplete(.failure(error))
             }
         }
     }

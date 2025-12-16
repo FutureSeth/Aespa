@@ -91,7 +91,7 @@ extension AespaVideoContext: VideoContext {
     }
     
     public func stopRecording(_ onCompelte: @escaping ResultHandler<VideoFile> = { _ in }) {
-        Task(priority: .utility) {
+        Task { @MainActor in
             do {
                 let videoFilePath = try await recorder.stopRecording()
                 
