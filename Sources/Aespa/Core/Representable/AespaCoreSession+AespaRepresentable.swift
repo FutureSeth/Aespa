@@ -165,6 +165,7 @@ extension AespaCoreSession: AespaCoreSessionRepresentable {
         }
 
         let fileOutput = AVCaptureMovieFileOutput()
+        fileOutput.movieFragmentInterval = .invalid
         guard self.canAddOutput(fileOutput) else {
             throw AespaError.device(reason: .unableToSetOutput)
         }
