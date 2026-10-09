@@ -5,7 +5,6 @@
 //  Created by 이영빈 on 2023/06/02.
 //
 
-import Combine
 import Foundation
 import AVFoundation
 
@@ -13,9 +12,12 @@ import AVFoundation
 class AespaCoreRecorder: NSObject {
     private let core: AespaCoreSession
 
-    /// Notify the end of recording
-    private let fileIOResultSubject = PassthroughSubject<Result<URL, Error>, Never>()
-    private var fileIOResultSubsciption: Cancellable?
+    /// The caller waiting in `stopRecording()`, resumed exactly once when the file finishes.
+    private var stopContinuation: CheckedContinuation<URL, Error>?
+    /// A recording that finished before anyone asked to stop it (e.g. the session was
+    /// interrupted). Handed to the next `stopRecording()` so it doesn't wait forever.
+    private var unclaimedResult: Result<URL, Error>?
+    private let stateLock = NSLock()
 
     init(core: AespaCoreSession) {
         self.core = core
@@ -42,6 +44,10 @@ extension AespaCoreRecorder {
         _ autoVideoOrientationEnabled: Bool,
         _ onComplete: @escaping CompletionHandler
     ) {
+        stateLock.withLock {
+            unclaimedResult = nil
+        }
+
         run(processor: StartRecordProcessor(
             filePath: filePath,
             delegate: self,
@@ -50,19 +56,45 @@ extension AespaCoreRecorder {
     }
     
     func stopRecording() async throws -> URL {
-        run(processor: FinishRecordProcessor(), { _ in })
-        
-        return try await withCheckedThrowingContinuation { continuation in
-            fileIOResultSubsciption = fileIOResultSubject.sink { _ in
-                // Do nothing on completion; we're only interested in values.
-            } receiveValue: { result in
-                switch result {
-                case .success(let url):
-                    continuation.resume(returning: url)
-                case .failure(let error):
-                    continuation.resume(throwing: error)
+        try await withCheckedThrowingContinuation { continuation in
+            enum Claim {
+                case alreadyFinished(Result<URL, Error>)
+                case alreadyStopping
+                case waiting
+            }
+
+            // Register before stopping so the delegate callback can't arrive first.
+            let claim: Claim = stateLock.withLock {
+                if let result = unclaimedResult {
+                    unclaimedResult = nil
+                    return .alreadyFinished(result)
+                }
+                if stopContinuation != nil {
+                    return .alreadyStopping
+                }
+                stopContinuation = continuation
+                return .waiting
+            }
+
+            switch claim {
+            case .alreadyFinished(let result):
+                continuation.resume(with: result)
+            case .alreadyStopping:
+                continuation.resume(throwing: AespaError.device(reason: .busy))
+            case .waiting:
+                run(processor: FinishRecordProcessor()) { [weak self] result in
+                    if case .failure(let error) = result {
+                        self?.takeStopContinuation()?.resume(throwing: error)
+                    }
                 }
             }
+        }
+    }
+
+    private func takeStopContinuation() -> CheckedContinuation<URL, Error>? {
+        stateLock.withLock {
+            defer { stopContinuation = nil }
+            return stopContinuation
         }
     }
 }
@@ -84,11 +116,23 @@ extension AespaCoreRecorder: AVCaptureFileOutputRecordingDelegate {
     ) {
         Logger.log(message: "Recording stopped")
 
+        let result: Result<URL, Error>
         if let error {
             Logger.log(error: error)
-            fileIOResultSubject.send(.failure(error))
+            result = .failure(error)
         } else {
-            fileIOResultSubject.send(.success(outputFileURL))
+            result = .success(outputFileURL)
         }
+
+        // Resume whoever is waiting; if nobody asked to stop yet, keep it for the next call.
+        let waiting: CheckedContinuation<URL, Error>? = stateLock.withLock {
+            if let continuation = stopContinuation {
+                stopContinuation = nil
+                return continuation
+            }
+            unclaimedResult = result
+            return nil
+        }
+        waiting?.resume(with: result)
     }
 }

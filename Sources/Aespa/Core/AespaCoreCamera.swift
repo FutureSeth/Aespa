@@ -1,11 +1,10 @@
 //
 //  AespaCoreCamera.swift
-//  
+//
 //
 //  Created by Young Bin on 2023/06/18.
 //
 
-import Combine
 import Foundation
 import AVFoundation
 
@@ -13,8 +12,10 @@ import AVFoundation
 class AespaCoreCamera: NSObject {
     private let core: AespaCoreSession
 
-    private let fileIOResultSubject = PassthroughSubject<Result<AVCapturePhoto, Error>, Never>()
-    private var fileIOResultSubsciption: Cancellable?
+    /// One continuation per in-flight capture, keyed by its settings' `uniqueID`, so
+    /// overlapping captures each resume exactly once with their own photo.
+    private var pendingCaptures: [Int64: CheckedContinuation<AVCapturePhoto, Error>] = [:]
+    private let pendingCapturesLock = NSLock()
 
     init(core: AespaCoreSession) {
         self.core = core
@@ -35,19 +36,24 @@ extension AespaCoreCamera {
         autoVideoOrientationEnabled: Bool
     ) async throws -> AVCapturePhoto {
         let processor = CapturePhotoProcessor(setting: setting, delegate: self, autoVideoOrientationEnabled: autoVideoOrientationEnabled)
-        try run(processor: processor)
 
         return try await withCheckedThrowingContinuation { continuation in
-            fileIOResultSubsciption = fileIOResultSubject
-                .subscribe(on: DispatchQueue.global())
-                .sink(receiveValue: { result in
-                    switch result {
-                    case .success(let photo):
-                        continuation.resume(returning: photo)
-                    case .failure(let error):
-                        continuation.resume(throwing: error)
-                    }
-                })
+            // Register before starting the capture so a fast delegate callback can't miss it.
+            pendingCapturesLock.withLock {
+                pendingCaptures[setting.uniqueID] = continuation
+            }
+
+            do {
+                try run(processor: processor)
+            } catch {
+                takePendingCapture(for: setting.uniqueID)?.resume(throwing: error)
+            }
+        }
+    }
+
+    private func takePendingCapture(for uniqueID: Int64) -> CheckedContinuation<AVCapturePhoto, Error>? {
+        pendingCapturesLock.withLock {
+            pendingCaptures.removeValue(forKey: uniqueID)
         }
     }
 }
@@ -60,11 +66,32 @@ extension AespaCoreCamera: AVCapturePhotoCaptureDelegate {
     ) {
         Logger.log(message: "Photo captured")
 
-        if let error {
-            fileIOResultSubject.send(.failure(error))
-            Logger.log(error: error)
-        } else {
-            fileIOResultSubject.send(.success(photo))
+        // A capture can deliver more than one photo; the first one resolves it.
+        guard let continuation = takePendingCapture(for: photo.resolvedSettings.uniqueID) else {
+            return
         }
+
+        if let error {
+            Logger.log(error: error)
+            continuation.resume(throwing: error)
+        } else {
+            continuation.resume(returning: photo)
+        }
+    }
+
+    func photoOutput(
+        _ output: AVCapturePhotoOutput,
+        didFinishCaptureFor resolvedSettings: AVCaptureResolvedPhotoSettings,
+        error: Error?
+    ) {
+        // Always the last callback for a capture. If no photo arrived, fail instead of
+        // leaving the caller suspended forever.
+        guard let continuation = takePendingCapture(for: resolvedSettings.uniqueID) else {
+            return
+        }
+
+        let failure = error ?? AespaError.file(reason: .unableToFlatten)
+        Logger.log(error: failure)
+        continuation.resume(throwing: failure)
     }
 }
