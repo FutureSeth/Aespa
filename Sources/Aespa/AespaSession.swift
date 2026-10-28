@@ -347,11 +347,11 @@ extension AespaSession: PhotoContext {
 
 extension AespaSession {
     func startSession(_ onComplete: @escaping CompletionHandler) {
-        do {
-            try coreSession.start()
-            previewLayerSubject.send(previewLayer)
-        } catch let error {
-            onComplete(.failure(error))
+        coreSession.start { [previewLayerSubject, previewLayer] result in
+            if case .success = result {
+                previewLayerSubject.send(previewLayer)
+            }
+            onComplete(result)
         }
     }
     

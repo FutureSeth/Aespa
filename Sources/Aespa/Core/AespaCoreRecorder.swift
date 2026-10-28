@@ -5,6 +5,7 @@
 //  Created by 이영빈 on 2023/06/02.
 //
 
+import UIKit
 import Foundation
 import AVFoundation
 
@@ -24,17 +25,7 @@ class AespaCoreRecorder: NSObject {
     }
 
     func run<T: AespaMovieFileOutputProcessing>(processor: T, _ onComplete: @escaping CompletionHandler) {
-        guard let output = core.movieFileOutput else {
-            onComplete(.failure(AespaError.session(reason: .cannotFindConnection)))
-            return
-        }
-
-        do {
-            try processor.process(output)
-            onComplete(.success(()))
-        } catch {
-            onComplete(.failure(error))
-        }
+        core.run(processor, onComplete)
     }
 }
 
@@ -48,10 +39,13 @@ extension AespaCoreRecorder {
             unclaimedResult = nil
         }
 
+        // Read on the caller's (main) queue; the processor runs on the session queue.
+        let videoOrientation = autoVideoOrientationEnabled ? UIDevice.current.orientation.toVideoOrientation : nil
+
         run(processor: StartRecordProcessor(
             filePath: filePath,
             delegate: self,
-            autoVideoOrientationEnabled: autoVideoOrientationEnabled),
+            videoOrientation: videoOrientation),
             onComplete)
     }
     

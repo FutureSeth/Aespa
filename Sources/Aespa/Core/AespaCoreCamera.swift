@@ -5,6 +5,7 @@
 //  Created by Young Bin on 2023/06/18.
 //
 
+import UIKit
 import Foundation
 import AVFoundation
 
@@ -20,14 +21,6 @@ class AespaCoreCamera: NSObject {
     init(core: AespaCoreSession) {
         self.core = core
     }
-
-    func run<T: AespaCapturePhotoOutputProcessing>(processor: T) throws {
-        guard let output = core.photoOutput else {
-            throw AespaError.session(reason: .cannotFindConnection)
-        }
-
-        try processor.process(output)
-    }
 }
 
 extension AespaCoreCamera {
@@ -35,7 +28,12 @@ extension AespaCoreCamera {
         setting: AVCapturePhotoSettings,
         autoVideoOrientationEnabled: Bool
     ) async throws -> AVCapturePhoto {
-        let processor = CapturePhotoProcessor(setting: setting, delegate: self, autoVideoOrientationEnabled: autoVideoOrientationEnabled)
+        // UIDevice is main-only; the processor runs on the session queue.
+        var videoOrientation: AVCaptureVideoOrientation?
+        if autoVideoOrientationEnabled {
+            videoOrientation = await MainActor.run { UIDevice.current.orientation.toVideoOrientation }
+        }
+        let processor = CapturePhotoProcessor(setting: setting, delegate: self, videoOrientation: videoOrientation)
 
         return try await withCheckedThrowingContinuation { continuation in
             // Register before starting the capture so a fast delegate callback can't miss it.
@@ -43,10 +41,10 @@ extension AespaCoreCamera {
                 pendingCaptures[setting.uniqueID] = continuation
             }
 
-            do {
-                try run(processor: processor)
-            } catch {
-                takePendingCapture(for: setting.uniqueID)?.resume(throwing: error)
+            core.run(processor) { result in
+                if case .failure(let error) = result {
+                    self.takePendingCapture(for: setting.uniqueID)?.resume(throwing: error)
+                }
             }
         }
     }

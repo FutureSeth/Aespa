@@ -12,6 +12,8 @@ import AVFoundation
 /// `AespaSessionTuning` defines a set of requirements for classes or structs that aim to adjust settings
 /// for an `AespaCoreSessionRepresentable`.
 ///
+/// `tune(_:)` runs on Aespa's serial session queue, never the main queue, so it must not touch UI.
+///
 /// - Warning: Do not `begin` or `commit` session change yourself. It can cause deadlock.
 ///     Instead, use `needTransaction` flag
 public protocol AespaSessionTuning {

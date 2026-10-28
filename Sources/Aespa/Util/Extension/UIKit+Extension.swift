@@ -10,10 +10,9 @@ import AVFoundation
 
 extension UIDeviceOrientation {
     var toVideoOrientation: AVCaptureVideoOrientation {
-        let currentOrientation = UIDevice.current.orientation
         let previewOrientation: AVCaptureVideoOrientation
 
-        switch currentOrientation {
+        switch self {
         case .portrait:
             previewOrientation = .portrait
         case .portraitUpsideDown:
